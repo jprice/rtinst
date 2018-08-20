@@ -10,109 +10,237 @@
 
 PATH=/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/bin:/sbin
 
-RTFILE=/usr/local/bin/rt
+osname=$(lsb_release -si)
+relno=$(lsb_release -sr | cut -d. -f1)
+sourcedir='http://rtorrent.net/downloads/'
 
-duoversion="0.13.2/0.9.2 0.13.3/0.9.3 0.13.4/0.9.4 0.13.6/0.9.6"
-OSNAME=$(cat /etc/issue.net | cut -d' ' -f1)
+xmlrpc_url='https://svn.code.sf.net/p/xmlrpc-c/code/advanced/'
+xmlrpcloc='svn://svn.code.sf.net/p/xmlrpc-c/code/advanced/'
 
+xmlrpc_url_alt='https://github.com/mirror/xmlrpc-c'
+xmlrpcloc_alt='https://github.com/mirror/xmlrpc-c/trunk/advanced'
 
+rtdevrel=1
+
+if [ $relno = 9 ] || [ $(lsb_release -sr) = 17.10 ] || [ $relno = 18 ]; then
+  rtdevrel=0
+fi
+
+if [ $rtdevrel = 0 ]; then
+  sourcedir='https://github.com/rakshasa/'
+fi
+
+listsize=6
+duoversion=''
+passed_rtvers=$1
+[ -z $logfile ] && logfile="/dev/null"
+
+# get a list of the most recent releases
+rt_releases=$(wget -q -O - $sourcedir | grep -o "rtorrent-[0-9]\{1,2\}\.[0-9]\{1,2\}\.[0-9]\{1,2\}\.tar.gz" | sort -uV | tail -$listsize | grep -o "[0-9]\{1,2\}\.[0-9]\{1,2\}\.[0-9]\{1,2\}")
+
+# extract the release numbers from the list of most recent releases
+for rtversion in $rt_releases
+  do
+    libversion=$(echo $rtversion | awk -F. -v OFS=. '{$2='$(( $(echo $rtversion | cut -d. -f2) + 4 ))'; print }')
+    duoversion="$duoversion $libversion/$rtversion"
+  done
+
+# get the most recent release version number
+latest_duo=$(echo $duoversion | rev | cut -d' ' -f1 | rev)
+latest_libvers=$(echo $latest_duo | cut -d/ -f1)
+latest_rtvers=$(echo $latest_duo | cut -d/ -f2)
+
+# checks if an application is installed
 installed() {
 hash $1 2>/dev/null
 }
 
-ask_version() {
+#function to check if a web site is reachable
+check_url() {
+  if [[ `wget -S --spider $1  2>&1 | grep 'HTTP/1.1 200 OK'` ]]; then return 0; else return 1; fi
+}
+
+# function to create a list of versions to install
+list_version() {
+local verschoice
 while [ -z "$verschoice" ]
 do
-echo "Please select libtorrent/rtorrent version."
-select verschoice in ${duoversion[*]}
-do
-libvers=$(echo $verschoice | cut -d/ -f1)
-rtvers=$(echo $verschoice | cut -d/ -f2)
-break
-done
+  echo "Please select libtorrent/rtorrent version."
+  select verschoice in ${duoversion[*]}
+  do
+    libvers=$(echo $verschoice | cut -d/ -f1)
+    rtvers=$(echo $verschoice | cut -d/ -f2)
+    break
+  done
 done
 }
 
-confirm_answer() {
+ask_user(){
+local answer
 while true
-      do
-      read -p "Sure you wish to install libtorrent-"$libvers" and rtorrent-"$rtvers"?" answer
-      case $answer in [Yy]* ) return 0 ;;
-                      [Nn]* ) exit ;;
-                          * ) echo "Enter y or n";;
-      esac
-    done
-
+  do
+    read answer
+    case $answer in [Yy]* ) return 0 ;;
+                    [Nn]* ) return 1 ;;
+                        * ) echo "Enter y or n";;
+    esac
+  done
 }
 
-if ! [ "$LOGNAME" = "root" ]; then
+if [ "$(id -u)" != "0" ]; then
   echo "Must be run as root, or with sudo"
   exit 1
 fi
 
-if ( installed rtorrent ); then
-  echo "rtorrent detected"
-  echo
-else
-  echo "rtorrent NOT installed"
-  echo "This script is for upgrading/downgrading only, not for initial install"
+# Check the libtorrent/rtorrent and xmlrpc sites are available
+xmlrpc_repo=0
+rt_repo=0
+echo
+echo "Checking File Repositories"
+
+echo -n "xmlrpc-c: "; check_url $xmlrpc_url && echo "OK" ||  xmlrpc_repo=1
+
+if [[ $xmlrpc_repo = 1 ]]; then
+  xmlrpc_url=$xmlrpc_url_alt
+  xmlrpcloc=$xmlrpcloc_alt
+  check_url $xmlrpc_url && { echo "OK";  xmlrpc_repo=0; } || { echo "FAIL"; xmlrpc_repo=1; }
+fi
+
+echo -n "rtorrent: "; check_url $sourcedir && echo "OK" || { echo "FAIL"; rt_repo=1; }
+
+if [ $rt_repo = 1 ]; then
+  echo "The libtorrent/rtorrent file repositoy is offline"
+  echo "Try again later, you can check if the following address is online in your browser:"
+  echo $sourcedir
   exit 1
 fi
 
-ask_version
-confirm_answer
+if [ $xmlrpc_repo = 1 ]; then
+  if [ -d /usr/include/xmlrpc-c ]; then
+    echo "xmlrpc repository is off line, but looks like it has already beed installed."
+    echo "We will try and install rtorrent"
+  else
+    echo "The xmlrpc-c file repositoy is offline"
+    echo "Try again later, you can check if the following address is online in your browser:"
+    echo $xmlrpcloc
+    exit 1
+  fi
+fi
+
+if [ -z $passed_rtvers ]; then
+  if ( installed rtorrent ); then
+    rt_current=$(rtorrent -h | grep -om 1 "[0-9]\{1,2\}\.[0-9]\{1,2\}\.[0-9]\{1,2\}")
+    echo "rtorrent $rt_current detected"
+  else
+    echo "rtorrent NOT installed"
+    echo "This script is for upgrading/downgrading only, not for initial install"
+    exit 1
+  fi
+
+# checks if the OS is debian 9, and forces the version to 0.9.7 of it is
+  if [ $rtdevrel = 0 ]; then
+    libvers='0.13.7'
+    rtvers='0.9.7'
+    echo "Debian 9, and Ubuntu 17.10 and later, are only supported by libtorrent-0.13.7/rtorrent-0.9.7"
+  else
+    list_version
+  fi
+
+  echo "Install libtorrent-$libvers and rtorrent-$rtvers"
+  echo "Your rtorrent config, torrents, and data will not be lost or changed"
+  echo -n "Continue? "
+  if ! ask_user; then
+    exit
+  fi
+else
+  if [ "$passed_rtvers" = "latest" ] || [ $(wget -q -O - $sourcedir | grep -o "rtorrent-$passed_rtvers.tar.gz" | wc -l) -eq 0 ]; then
+    if [ "$passed_rtvers" != "latest" ]; then
+      echo " Could not find $passed_rtvers so using latest version instead"
+    fi
+    libvers=$latest_libvers
+    rtvers=$latest_rtvers
+  else
+    libvers=$(echo $passed_rtvers | awk -F. -v OFS=. '{$2='$(( $(echo $rtversion | cut -d. -f2) + 4 ))'; print }')
+    rtvers=$passed_rtvers
+  fi
+
+  # checks if the OS is debian 9, and forces the version to 0.9.7 of it is
+  if [ $rtdevrel = 0 ]; then
+    libvers='0.13.7'
+    rtvers='0.9.7'
+    echo "Debian 9, and Ubuntu 17.10 and later, are only supported by libtorrent-0.13.7/rtorrent-0.9.7"
+  fi
+
+fi
+
+if [ -z "$home" ]; then
+  home=$HOME
+fi
 
 echo
-echo "Installing $libvers/$rtvers"
+echo "Installing libtorrent-$libvers/rtorrent-$rtvers"
 
-cd $HOME
-
-rtgetscripts
+cd $home
 
 if [ -d source ]; then
   cd source
 else
   mkdir source && cd source
 fi
-rm -r libtorrent* rtorrent*
+rm -rf xmlrpc libtorrent* rtorrent*
 
 echo "Fetching source files"
-curl -# http://rtorrent.net/downloads/libtorrent-$libvers.tar.gz | tar xz
-curl -# http://rtorrent.net/downloads/rtorrent-$rtvers.tar.gz | tar xz
 
-echo "Compiling libtorrent"
-cd $HOME/source/libtorrent-$libvers
-./autogen.sh >> /dev/null 2>&1
-if [ $OSNAME = "Raspbian" ]; then
-    ./configure --prefix=/usr --disable-instrumentation >> /dev/null 2>&1
-  else
-    ./configure --prefix=/usr >> /dev/null 2>&1
+
+if [ $rtdevrel = 0 ]; then
+  git clone -q -b feature-bind --single-branch https://github.com/rakshasa/libtorrent.git libtorrent-$libvers
+  git clone -q -b feature-bind --single-branch https://github.com/rakshasa/rtorrent.git rtorrent-$rtvers
+else
+  curl -# http://rtorrent.net/downloads/libtorrent-$libvers.tar.gz | tar xz
+  curl -# http://rtorrent.net/downloads/rtorrent-$rtvers.tar.gz | tar xz
 fi
-make -j2 >> /dev/null 2>&1
-make install >> /dev/null 2>&1
 
-echo "Compiling rtorrent"
-cd $HOME/source/rtorrent-$rtvers
-./autogen.sh >> /dev/null 2>&1
-./configure --prefix=/usr --with-xmlrpc-c >> /dev/null 2>&1
-make -j2 >> /dev/null 2>&1
-make install >> /dev/null 2>&1
-ldconfig
+if [ $xmlrpc_repo = 0 ]; then
+  svn co $xmlrpcloc xmlrpc  >> $logfile 2>&1
 
-cd /var/www/rutorrent/conf/users
-user_list=*
+  cd xmlrpc
+  echo "Installing xmlrpc" | tee -a $logfile
+  ./configure --prefix=/usr --disable-cplusplus >> $logfile 2>&1
+  make -j$(nproc) >> $logfile 2>&1
+  make -s install >> $logfile 2>&1
+  cd ..
+fi
 
-for user in $user_list
-  do
-    if [ ! $user = '*' ]; then
+cd libtorrent-$libvers
+echo "Installing libtorrent" | tee -a $logfile
+./autogen.sh >> $logfile 2>&1
+if [ $osname = "Raspbian" ]; then
+  ./configure --prefix=/usr --disable-instrumentation >> $logfile 2>&1
+else
+  ./configure --prefix=/usr >> $logfile 2>&1
+fi
+make -j$(nproc) >> $logfile 2>&1
+make -s install >> $logfile 2>&1
+
+cd ../rtorrent-$rtvers
+echo "Installing rtorrent" | tee -a $logfile
+./autogen.sh >> $logfile 2>&1
+./configure --prefix=/usr --with-xmlrpc-c >> $logfile 2>&1
+make -j$(nproc) >> $logfile 2>&1
+make -s install >> $logfile 2>&1
+ldconfig >> $logfile 2>&1
+
+ echo "$libvers/$rtvers installed"
+ echo
+
+if [ -d /var/www/rutorrent/conf/users ]; then
+  cd /var/www/rutorrent/conf/users
+  user_list=*
+  for user in $user_list; do
+    if [ ! "$user" = '*' ]; then
       echo "Restarting rtorrent for $user"
       su $user -c 'rt restart >> /dev/null 2>&1'
     fi
   done
-
-cd $HOME
-
-echo
-echo "$libvers/$rtvers installed"
-echo
-echo "Your .rtorrent.rc file, and download, watch, and .session directories have not been altered in any way"
+  echo
+fi

@@ -8,6 +8,10 @@
 #
 ######################################################################
 
+###############################
+### SET VARIABLES ###
+###############################
+
 PATH=/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/bin:/sbin
 passfile='/etc/nginx/.htpasswd'
 
@@ -19,10 +23,15 @@ ftpport=$(grep 'listen_port=' /etc/vsftpd.conf | sed 's/[^0-9]*//g')
 cronline1="@reboot sleep 10; /usr/local/bin/rtcheck irssi rtorrent"
 cronline2="*/10 * * * * /usr/local/bin/rtcheck irssi rtorrent"
 serverip=$(ip route get 8.8.8.8 | awk 'NR==1 {print $NF}')
+check_ssh=1
 
 #get user list
 cd /var/www/rutorrent/conf/users
 user_list=*
+
+###############################
+### FUNCTIONS ###
+###############################
 
 genpasswd() {
 local genln=$1
@@ -44,9 +53,9 @@ local port_count=$1
 local port_type=$2
 local no_match=1
 
-while ! [ $no_match = 0 ]
+while [[ $no_match -ne 0 ]]
   do
-    if [ "$port_type" = "adl" ]; then
+    if [[ $port_type = "adl" ]]; then
       port_count=$(random 34000 39000)
     else
      port_count=$(( $port_count + 1 ))
@@ -56,7 +65,7 @@ while ! [ $no_match = 0 ]
       do
         current_user=$i
         current_port=$(grep $port_type /var/www/rutorrent/conf/users/$current_user/config.php | sed 's/[^0-9]*//g')
-        if [ "$current_port" = "$port_count" ]; then
+        if [[ $current_port = $port_count ]]; then
           no_match=1
           break
         else
@@ -73,7 +82,7 @@ local low_count=$1
 local high_count=$(( $low_count +249 ))
 local no_match=1
 local higher=0
-while ! [ $no_match = 0 ]
+while [[ $no_match -eq 1 ]]
   do
     low_count=$(( $low_count + 250 ))
     high_count=$(( $high_count + 250 ))
@@ -81,12 +90,12 @@ while ! [ $no_match = 0 ]
       do
        base_user=$i
        base_home=$(eval echo "~$base_user")
-       base_low=$(grep "port_range =" $base_home/.rtorrent.rc | sed 's/[^0-9-]*//g' | cut -d- -f1)
-       base_high=$(grep "port_range =" $base_home/.rtorrent.rc | sed 's/[^0-9-]*//g' | cut -d- -f2)
-       if [ $low_count -gt $base_high ]; then
+       base_low=$(grep "port_range" $base_home/.rtorrent.rc | sed 's/[^0-9-]*//g' | cut -d- -f1)
+       base_high=$(grep "port_range" $base_home/.rtorrent.rc | sed 's/[^0-9-]*//g' | cut -d- -f2)
+       if [[ $low_count -gt $base_high ]]; then
          no_match=0
          higher=0
-       elif [ $high_count -lt $base_low ]; then
+       elif [[ $high_count -lt $base_low ]]; then
          no_match=0
          higher=1
        else
@@ -98,20 +107,20 @@ while ! [ $no_match = 0 ]
          do
            compare_user=$n
            compare_home=$(eval echo "~$compare_user")
-           if [ $no_match=1 ]; then
+           if [[ $no_match -eq 1 ]]; then
              break
            fi
 
-           if ! [ $base_user = $compare_user ]; then
-             compare_low=$(grep "port_range =" $compare_home/.rtorrent.rc | sed 's/[^0-9-]*//g' | cut -d- -f1)
-             compare_high=$(grep "port_range =" $compare_home/.rtorrent.rc | sed 's/[^0-9-]*//g' | cut -d- -f2)
+           if [[ $base_user != $compare_user ]]; then
+             compare_low=$(grep "port_range" $compare_home/.rtorrent.rc | sed 's/[^0-9-]*//g' | cut -d- -f1)
+             compare_high=$(grep "port_range" $compare_home/.rtorrent.rc | sed 's/[^0-9-]*//g' | cut -d- -f2)
 
-             if [ $higher = 0 ]; then
-               if [ $base_low -gt $compare_high ]; then
+             if [[ $higher -eq 0 ]]; then
+               if [[ $base_low -gt $compare_high ]]; then
                  no_match=0
-               elif [ $high_count -lt $compare_low ]; then
+               elif [[ $high_count -lt $compare_low ]]; then
                  no_match=0
-               elif [ $compare_low -gt $base_high ] && [ $compare_high -lt $count_low  ]; then
+               elif [[ $compare_low -gt $base_high && $compare_high -lt $low_count ]]; then
                  no_match=0
                else
                  no_match=1
@@ -119,12 +128,12 @@ while ! [ $no_match = 0 ]
                fi
            fi
 
-           if [ $higher = 1 ]; then
-             if [ $base_high -lt $compare_low ]; then
+           if [[ $higher -eq 1 ]]; then
+             if [[ $base_high -lt $compare_low ]]; then
                no_match=0
-             elif [ $low_count -gt $compare_high ]; then
+             elif [[ $low_count -gt $compare_high ]]; then
                no_match=0
-             elif [ $compare_high -lt $base_low ] && [ $compare_low -gt $count_high  ]; then
+             elif [[ $compare_high -lt $base_low && $compare_low -gt $high_count ]]; then
                no_match=0
              else
                no_match=1
@@ -136,46 +145,81 @@ while ! [ $no_match = 0 ]
       done
   done
 echo "$low_count-$high_count"
-
 }
 
+###############################
+### INITIAL SYSTEM CHECKS ###
+###############################
+
 # set and prepare user
-if ! [ "$LOGNAME" = "root" ]; then
-echo "Must be run from root or using sudo" && exit 1
+if [ "$(id -u)" != "0" ]; then
+  echo "Must be run from root or using sudo" && exit 1
 fi
 
-echo "Enter the name of the user to add"
-echo "It can be an existing user or a new user"
-echo
+# get options
+OPTS=$(getopt -n "$0" -o snu:p:w: --long "ssh-access,no-ssh,user:,password:,webpass:" -- "$@")
 
-confirm_name=1
-while [ $confirm_name = 1 ]
-  do
-    read -p "Enter user name: " answer
-    addname=$answer
-    check_name=1
-    if [ "$addname" = "root" ]; then
+eval set -- "$OPTS"
+
+while true; do
+  case "$1" in
+    -s | --ssh-access ) check_ssh=0; sshaccess=0; shift;;
+    -n | --no-ssh ) check_ssh=0; sshaccess=1; shift;;
+    -u | --user ) user="$2"; shift; shift;;
+    -p | --password ) unixpass="$2"; shift; shift;;
+    -w | --webpass ) webpass="$2"; shift; shift;;
+    -- ) shift; break ;;
+     * ) break ;;
+  esac
+done
+
+if [ "$user" = "root" ]; then
       echo "Cannot create root"
       exit
-    fi
+fi
 
-    while [ $check_name = 1 ]
-      do
-        read -p "Is $addname correct? " answer
-        case $answer in [Yy]* ) confirm_name=0 && check_name=0  ;;
-                        [Nn]* ) confirm_name=1 && check_name=0  ;;
-                            * ) echo "Enter y or n";;
-        esac
-      done
-  done
+###############################
+### ADD USER ###
+###############################
 
-user=$addname
+if [ -z "$user" ]; then
+  echo "Enter the name of the user to add"
+  echo "It can be an existing user or a new user"
+  echo
+
+  confirm_name=1
+  while [ $confirm_name = 1 ]
+    do
+      read -p "Enter user name: " answer
+      addname=$answer
+      check_name=1
+      if [ "$addname" = "root" ]; then
+        echo "Cannot create root"
+        exit
+      fi
+
+      while [ $check_name = 1 ]
+        do
+          read -p "Is $addname correct? " answer
+          case $answer in [Yy]* ) confirm_name=0 && check_name=0  ;;
+                          [Nn]* ) confirm_name=1 && check_name=0  ;;
+                              * ) echo "Enter y or n";;
+          esac
+        done
+    done
+
+  user=$addname
+fi
 
 if id -u $user >/dev/null 2>&1; then
   echo "$user already exists"
 else
-  echo "adding $user"
-  adduser --gecos "" $user
+  if [ -z "$unixpass" ]; then
+    adduser --gecos "" $user
+  else
+    adduser --gecos "" $user --disabled-password
+    echo "$user:$unixpass" | sudo chpasswd
+  fi
 fi
 
 home=$(eval echo "~$user")
@@ -184,7 +228,6 @@ if [ -d "/var/www/rutorrent/conf/users/$user" ]; then
   echo "Will reset $user config, filters and torrents will not be deleted"
 fi
 
-check_ssh=1
 if groups $user | grep -q -E ' sshuser(\s|$)' || groups $user | grep -q -E ' sudo(\s|$)'; then
   echo "ssh already granted"
   check_ssh=0
@@ -200,37 +243,17 @@ fi
    done
 
 if [ "$sshaccess" = "0" ]; then
-  groupadd sshuser
-  allowlist=$(grep AllowUsers /etc/ssh/sshd_config)
-  if ! [ -z "$allowlist" ]; then
-    for ssh_user in $allowlist
-      do
-        if ! [ "$ssh_user" = "AllowUsers" ]; then
-          adduser $ssh_user sshuser
-        fi
-      done
-    perl -pi -e "s/$allowlist//g" /etc/ssh/sshd_config
-    service ssh restart
-  fi
-
-  groupslist=$(grep AllowGroups /etc/ssh/sshd_config)
-  echo $groupslist
-  if [ -z "$groupslist" ]; then
-    echo "AllowGroups sudo sshuser" | tee -a /etc/ssh/sshd_config > /dev/null
-    service ssh restart
-  fi
-
-  if [ -z "$(groups $user | grep "sshuser")" ]; then
       adduser $user sshuser
-  fi
 fi
-
-rtgetscripts
 
 if [ "$user" = "$SUDO_USER" ]; then
   echo "Will reset $user config, autodl filters and torrents will not be deleted"
-  rtgetscripts /var/www/rutorrent/conf/config.php ru.config 
+  cp -f /etc/rtinst/conf/ru.config /var/www/rutorrent/conf/config.php 
 fi
+
+###############################
+### CONFIGURE APPLICATIONS ###
+###############################
 
 #remove existing directory if there
 if [ -d "/var/www/rutorrent/conf/users/$user" ]; then
@@ -256,22 +279,28 @@ if ! [ -d "$home/rtorrent/.session" ]; then
 mkdir $home/rtorrent/.session
 fi
 
-if ! [ -d "$home/rtorrent/downloads" ]; then
-mkdir $home/rtorrent/downloads
+if ! [ -d "$home/rtorrent/download" ]; then
+mkdir $home/rtorrent/download
 fi
 
 if ! [ -d "$home/rtorrent/watch" ]; then
 mkdir $home/rtorrent/watch
 fi
 
-WEBPASS=$(genpasswd)
-htpasswd -b $passfile $user $WEBPASS
+if [ -z "$webpass" ] && [ -z $(grep -s $user $passfile) ]; then
+  webpass=$(genpasswd)
+fi
 
-rtgetscripts $home/.rtorrent.rc
+if [ ! -z "$webpass" ]; then
+  htpasswd -b $passfile $user $webpass
+fi
+
+cp -f /etc/rtinst/conf/rtorrent.rc $home/.rtorrent.rc
 
 sed -i "s|<user home>|${home}|g" $home/.rtorrent.rc
 sed -i "s/<user name>/$user/g" $home/.rtorrent.rc
 sed -i "s/port_range = 51001-51250/port_range = $newrange/g" $home/.rtorrent.rc
+sed -i "s/network\.port_range\.set = 51001-51250/network\.port_range\.set = $newrange/g" $home/.rtorrent.rc
 sed -i "s/network\.scgi\.open_port = 127\.0\.0\.1:5000/network\.scgi\.open_port = 127\.0\.0\.1:$newscgi/g" $home/.rtorrent.rc
 
 echo "<?php" > /var/www/rutorrent/conf/users/$user/config.php
@@ -283,7 +312,9 @@ echo "\$XMLRPCMountPoint = \"/RPC$newrpc\";" >> /var/www/rutorrent/conf/users/$u
 echo >> /var/www/rutorrent/conf/users/$user/config.php
 echo "?>" >> /var/www/rutorrent/conf/users/$user/config.php
 
-#add auto-dl
+###############################
+### AUTODL-IRSSI ###
+###############################
 mkdir /var/www/rutorrent/conf/users/$user/plugins/autodl-irssi
 mkdir -p $home/.irssi/scripts/autorun
 cd $home/.irssi/scripts
@@ -292,7 +323,6 @@ unzip -o autodl-irssi.zip >> /dev/null 2>&1
 rm autodl-irssi.zip
 cp autodl-irssi.pl autorun/
 mkdir -p $home/.autodl
-touch $home/.autodl/autodl.cfg && touch $home/.autodl/autodl2.cfg
 
 echo "<?php" > /var/www/rutorrent/conf/users/$user/plugins/autodl-irssi/conf.php
 echo >> /var/www/rutorrent/conf/users/$user/plugins/autodl-irssi/conf.php
@@ -302,13 +332,25 @@ echo >> /var/www/rutorrent/conf/users/$user/plugins/autodl-irssi/conf.php
 echo "?>" >> /var/www/rutorrent/conf/users/$user/plugins/autodl-irssi/conf.php
 
 cd $home/.autodl
-echo "[options]" > autodl2.cfg
-echo "gui-server-port = $adlport" >> autodl2.cfg
-echo "gui-server-password = $adlpass" >> autodl2.cfg
+
+if [ -f "autodl.cfg" ]; then
+  if (grep -sq gui-server-port autodl.cfg) && (grep -sq gui-server-password autodl.cfg); then
+    sed -i "/gui-server-port/ c\gui-server-port = $adlport" autodl.cfg
+    sed -i "/gui-server-password/ c\gui-server-password = $adlpass" autodl.cfg
+  else
+    sed -i '/gui-server-port/ d' autodl.cfg
+    sed -i '/gui-server-password/ d' autodl.cfg
+    echo >> autodl.cfg
+    sed -i "1s/^/[options]\ngui-server-port = $adlport\ngui-server-password = $adlpass\n/" autodl.cfg
+  fi
+else
+  echo "[options]" > autodl.cfg
+  echo "gui-server-port = $adlport" >> autodl.cfg
+  echo "gui-server-password = $adlpass" >> autodl.cfg
+fi
 
 chown -R $user:$user $home
 chown -R www-data:www-data /var/www/rutorrent
-chmod -R 755 /var/www/rutorrent
 
 if [ -z "$(crontab -u $user -l | grep "$cronline1")" ]; then
   (crontab -u $user -l; echo "$cronline1" ) | crontab -u $user -
@@ -337,6 +379,12 @@ echo "autodl port: $adlport"
 echo "autodl pass: $adlpass"
 echo "crontab entries made, rtorrent and irssi will start on boot"
 echo
+
+###############################
+### WRITE RTINST.INFO ###
+###############################
+
+echo > $home/rtinst.info
 if groups $user | grep -q -E ' sshuser(\s|$)' || groups $user | grep -q -E ' sudo(\s|$)'; then
 echo "$user has SSH access on port $sshport" | tee -a $home/rtinst.info
 echo
@@ -348,7 +396,11 @@ echo "https downloads can be accessed at https://$serverip/download/$user" | tee
 echo
 fi
 echo "rutorrent can be accessed at https://$serverip/rutorrent" | tee -a $home/rtinst.info
-echo "rutorrent password set to $WEBPASS" | tee -a $home/rtinst.info
+if [ -z $webpass ]; then
+  echo "rutorrent password has not been changed" | tee -a $home/rtinst.info
+else
+  echo "rutorrent password set to $webpass" | tee -a $home/rtinst.info
+fi
 echo "to change rutorrent password enter: rtpass" | tee -a $home/rtinst.info
 echo
 echo "The above info is stored at $home/rtinst.info"

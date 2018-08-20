@@ -9,10 +9,9 @@
 ######################################################################
 
 PATH=/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/bin:/sbin
-SERVERIP=$(ip route get 8.8.8.8 | awk 'NR==1 {print $NF}')
-relno=$(lsb_release -sr | cut -d. -f1)
+serverip=$(ip route get 8.8.8.8 | awk 'NR==1 {print $NF}')
 
-if ! [ "$LOGNAME" = "root" ]; then
+if [ "$(id -u)" != "0" ]; then
   echo "Must be run as root, directly or with sudo"
   exit 1
 fi
@@ -21,8 +20,8 @@ if [ $(dpkg-query -W -f='${Status}' webmin 2>/dev/null | grep -c "ok installed")
   echo "Installing Webmin"
   echo "deb http://download.webmin.com/download/repository sarge contrib" > /etc/apt/sources.list.d/webmin.list
   wget -qO - http://www.webmin.com/jcameron-key.asc | apt-key add -
-  apt-get update  >> /dev/null 2>&1
-  apt-get -y install webmin  >> /dev/null 2>&1
+  apt-get -qq update
+  apt-get -qq install webmin
 else
   echo 'Webmin is already installed'
 fi
@@ -91,5 +90,5 @@ service webmin restart  >> /dev/null 2>&1
 service nginx restart  >> /dev/null 2>&1
 echo "Completed"
 echo
-echo "Webmin can be accessed at https://$SERVERIP/webmin"
+echo "Webmin can be accessed at https://$serverip/webmin"
 echo "login using root, or sudo user credentials"
